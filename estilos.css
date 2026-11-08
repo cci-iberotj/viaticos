@@ -180,6 +180,14 @@ a { color: var(--marca); }
 .visor.zoom img { max-width: none; max-height: none; width: 200%; }
 .visor button { position: fixed; top: calc(12px + env(safe-area-inset-top)); right: 12px; }
 
+/* Agregar a la pantalla de inicio */
+.instalar { border: 1.5px solid var(--marca-velo); }
+.pasos-inicio { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; counter-reset: p; }
+.pasos-inicio li { display: flex; align-items: center; gap: 12px; font-size: 15.5px; }
+.ico-ios { flex: none; width: 40px; height: 40px; border-radius: 10px; background: var(--info-velo); color: var(--info); display: grid; place-items: center; }
+.ico-ios svg { width: 22px; height: 22px; }
+.ico-ios img { width: 40px; height: 40px; border-radius: 10px; }
+
 /* Fecha límite rápida */
 .rapidas { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 6px; }
 .rapidas button { min-height: 38px; padding: 6px 12px; border-radius: 99px; border: 1px solid var(--linea); background: var(--capa-1); font-size: 14px; font-weight: 600; color: var(--tinta-media); }

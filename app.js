@@ -28,6 +28,8 @@
     reloj: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
     info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>',
     imagen: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/></svg>',
+    compartir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>',
+    mas: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8M8 12h8"/></svg>',
     abrir: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   };
 
@@ -399,6 +401,53 @@
     if (vencida) avisar('Tu sesión venció. Vuelve a entrar.');
   }
 
+  /* ── Agregar a la pantalla de inicio ─────────────────────
+     iPhone no deja instalar con un botón: sólo Safari puede, desde
+     Compartir › Agregar a inicio. Se le enseñan los pasos. Android
+     (Chrome) sí avisa con beforeinstallprompt y ahí va un botón. La
+     tarjeta no sale cuando ya se abrió desde el ícono. */
+  const LLAVE_INSTALAR = 'viaticos.instalar';
+  const yaInstalada = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  const esIphone = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let avisoInstalar = null;
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); avisoInstalar = e; if (ruta().vista === 'tickets') vistaTickets(); });
+  window.addEventListener('appinstalled', () => { ls.set(LLAVE_INSTALAR, 'hecho'); avisoInstalar = null; });
+
+  function tarjetaInstalar(forzar) {
+    if (yaInstalada()) return '';
+    const pospuesta = ls.get(LLAVE_INSTALAR);
+    if (!forzar && (pospuesta === 'hecho' || (typeof pospuesta === 'number' && Date.now() < pospuesta))) return '';
+    let cuerpo;
+    if (avisoInstalar) {
+      cuerpo = '<p class="chico" style="margin:0 0 12px">Queda como app, con su ícono, y abre directo en tus tickets.</p>' +
+        '<button class="btn primario ancho" id="b-instalar">' + I.mas + 'Instalar Viáticos</button>';
+    } else if (esIphone()) {
+      const safari = /safari/i.test(navigator.userAgent) && !/crios|fxios|edgios/i.test(navigator.userAgent);
+      cuerpo = '<p class="chico" style="margin:0 0 10px">Así abre directo en tus tickets, como cualquier app.' +
+        (safari ? '' : ' <b>Si no ves «Agregar a inicio», ábrela en Safari.</b>') + '</p>' +
+        '<ol class="pasos-inicio">' +
+        '<li><span class="ico-ios">' + I.compartir + '</span><span>Toca <b>Compartir</b>. Si no lo ves abajo, está dentro del botón <b>•••</b>.</span></li>' +
+        '<li><span class="ico-ios">' + I.mas + '</span><span>Baja y elige <b>Agregar a inicio</b> (o «Agregar a pantalla de inicio»).</span></li>' +
+        '<li><span class="ico-ios"><img src="icono-180.png" alt=""></span><span>Toca <b>Agregar</b>. Ya queda el ícono rojo.</span></li></ol>';
+    } else {
+      cuerpo = '<p class="chico" style="margin:0">En el menú del navegador (⋮), elige <b>Agregar a la pantalla de inicio</b> o <b>Instalar app</b>.</p>';
+    }
+    return '<section class="tarjeta instalar" id="t-instalar"><h2>Ponla en tu pantalla de inicio</h2>' + cuerpo +
+      '<p style="margin:10px 0 0;text-align:right"><button class="enlace chico" id="b-instalar-no">' + (forzar ? 'Cerrar' : 'Ahora no') + '</button></p></section>';
+  }
+  function activarInstalar() {
+    const bi = $('#b-instalar');
+    if (bi) bi.onclick = async () => {
+      if (!avisoInstalar) return;
+      avisoInstalar.prompt();
+      const r = await avisoInstalar.userChoice.catch(() => ({}));
+      if (r.outcome === 'accepted') { ls.set(LLAVE_INSTALAR, 'hecho'); $('#t-instalar')?.remove(); }
+      avisoInstalar = null;
+    };
+    const bn = $('#b-instalar-no');
+    if (bn) bn.onclick = () => { ls.set(LLAVE_INSTALAR, Date.now() + 7 * 864e5); $('#t-instalar')?.remove(); };
+  }
+
   /* ── Vista: tickets (inicio) ─────────────────────────── */
   function vistaTickets() {
     const v = viajeActivo();
@@ -475,7 +524,8 @@
         : '<div class="franja info">' + I.info + '<div>Primero <a href="#viaje/nuevo">da de alta tu viaje</a>; los tickets se van juntando ahí.</div></div>') +
       '<button class="btn primario capturar" id="b-capturar">' + I.camara + 'Foto del ticket</button>' +
       '<div class="bajo-captura"><button class="enlace" id="b-galeria">Subir imagen</button><span class="tenue">·</span><button class="enlace" id="b-sinfoto">Sin foto</button></div>' +
-      franja + resumen + filtros + lista + nav('tickets');
+      tarjetaInstalar(false) + franja + resumen + filtros + lista + nav('tickets');
+    activarInstalar();
 
     $$('[data-filtro]').forEach(b => b.onclick = () => { E.filtro = b.dataset.filtro; vistaTickets(); });
     const bu = $('#b-ver-urgentes');
@@ -811,10 +861,13 @@
           '<span class="chico tenue">' + (v.inicio ? fechaCorta(v.inicio) + (v.fin ? ' – ' + fechaCorta(v.fin) : '') : 'Sin fechas') + ' · ' + k.n + (k.n === 1 ? ' ticket' : ' tickets') + '</span></span>' +
           '<span class="total">' + dinero(k.gastado) + (v.asignado > 0 ? '<br><span class="chico tenue" style="font-family:var(--texto);font-weight:400">de ' + dinero(v.asignado) + '</span>' : '') + '</span></a>';
       }).join('') + '</div>' : '<p class="vacio">Todavía no hay viajes.</p>') +
+      (yaInstalada() ? '' : '<div id="hueco-instalar" style="margin-top:22px"><button class="btn ancho" id="b-ver-instalar">' + I.mas + 'Agregar a mi pantalla de inicio</button></div>') +
       '<p style="text-align:center;margin-top:30px"><button class="enlace chico" id="b-salir">Cerrar sesión</button><br><span class="chico tenue">Versión ' + esc(CONFIG.version) + '</span></p>' +
       nav('viajes');
     pintarCola();
     $('#b-salir').onclick = () => salir(false);
+    const bvi = $('#b-ver-instalar');
+    if (bvi) bvi.onclick = () => { $('#hueco-instalar').innerHTML = tarjetaInstalar(true); activarInstalar(); };
   }
 
   function vistaViaje(id) {
