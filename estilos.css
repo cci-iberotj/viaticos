@@ -226,6 +226,8 @@ a { color: var(--marca); }
 .acceso h1 { font: 700 34px/1.1 var(--titular); margin: 0 0 4px; }
 .acceso p { color: var(--tinta-tenue); margin: 0 0 24px; }
 .acceso .campo { text-align: left; }
+.ver-clave { display: flex; align-items: center; gap: 8px; justify-content: flex-start; font-size: 15px; color: var(--tinta-media); margin: -4px 0 10px; }
+.ver-clave input { width: 20px; height: 20px; accent-color: var(--marca); }
 .error { color: var(--peligro); font-size: 15px; min-height: 22px; }
 
 /* Aviso flotante (copiado, borrado con deshacer) */

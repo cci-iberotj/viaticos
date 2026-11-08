@@ -142,13 +142,19 @@
 
   async function rpc(funcion, args = {}) {
     let r;
+    // Con datos lentos el fetch puede quedarse colgado: a los 25 s (60 s
+    // si va una foto) se corta y cuenta como «sin señal»; la cola reintenta.
+    const corte = new AbortController();
+    const reloj = setTimeout(() => corte.abort(), funcion === 'via_guardar_foto' ? 60000 : 25000);
     try {
       r = await fetch(CONFIG.nube.url + '/rest/v1/rpc/' + funcion, {
         method: 'POST',
         headers: { apikey: CONFIG.nube.llave, Authorization: 'Bearer ' + CONFIG.nube.llave, 'Content-Type': 'application/json' },
         body: JSON.stringify(args),
+        signal: corte.signal,
       });
     } catch (e) { const x = new Error('SIN_RED'); x.red = true; throw x; }
+    finally { clearTimeout(reloj); }
     const texto = await r.text();
     let d = null; try { d = texto ? JSON.parse(texto) : null; } catch (e) { }
     if (!r.ok) {
@@ -364,21 +370,24 @@
   function vistaAcceso() {
     app.innerHTML = '<div class="acceso"><form id="f-acceso" autocomplete="on">' +
       '<h1>Viáticos</h1><p>Tickets y facturas de tus viajes de trabajo</p>' +
-      '<label class="campo"><span>Usuario</span><input name="usuario" autocomplete="username" autocapitalize="none" required></label>' +
-      '<label class="campo"><span>Clave</span><input name="clave" type="password" autocomplete="current-password" required></label>' +
+      '<label class="campo"><span>Usuario</span><input name="usuario" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>' +
+      '<label class="campo"><span>Clave</span><input name="clave" type="password" autocomplete="current-password" autocapitalize="none" autocorrect="off" spellcheck="false" required></label>' +
+      '<label class="ver-clave"><input type="checkbox" id="ver-clave"> Mostrar la clave</label>' +
       '<p class="error" id="error"></p>' +
       '<button class="btn primario ancho">Entrar</button></form></div>';
+    $('#ver-clave').onchange = ev => { $('#f-acceso').clave.type = ev.target.checked ? 'text' : 'password'; };
     $('#f-acceso').onsubmit = async ev => {
       ev.preventDefault();
       const f = ev.target, b = f.querySelector('button');
       b.disabled = true; b.textContent = 'Entrando…'; $('#error').textContent = '';
       try {
-        E.sesion = await rpc('via_entrar', { p_usuario: f.usuario.value, p_clave: f.clave.value });
+        // El teclado del iPhone a veces agrega un espacio al final o pone mayúscula inicial.
+        E.sesion = await rpc('via_entrar', { p_usuario: f.usuario.value.trim().toLowerCase(), p_clave: f.clave.value.trim() });
         ls.set(LLAVE_SESION, E.sesion);
         location.hash = '#tickets';
         pintar(); sincronizar();
       } catch (e) {
-        $('#error').textContent = e.message === 'CLAVE' ? 'Usuario o clave incorrectos.' : e.red ? 'No hay conexión. Intenta de nuevo cuando tengas señal.' : e.message;
+        $('#error').textContent = e.message === 'CLAVE' ? 'Usuario o clave incorrectos. El usuario es «leo», en minúsculas.' : e.red ? 'La conexión no respondió. Intenta de nuevo; si sigue, prueba con Wi-Fi.' : e.message;
         b.disabled = false; b.textContent = 'Entrar';
       }
     };
