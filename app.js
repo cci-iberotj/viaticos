@@ -54,6 +54,43 @@
     return isNaN(n) ? null : Math.round(n * 100) / 100;
   };
   const cat = id => (CONFIG.categorias.find(c => c.id === id) || {}).nombre || '';
+  const norm = s => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const dmy = s => s ? s.split('-').reverse().join('/') : '';   // 2026-11-08 → 08/11/2026, como lo piden los portales
+  const conHttp = u => /^https?:/i.test(u) ? u : 'https://' + u;
+
+  /* Portales aprendidos: cada vez que anotas el portal de un comercio,
+     se recuerda para el siguiente ticket de ese comercio. No se trae
+     una lista de fábrica a propósito: una dirección inventada es peor
+     que ninguna. */
+  function portalConocido(comercio) {
+    const c = norm(comercio); if (!c) return '';
+    const p = (E.datos.ajustes || {}).portales || {};
+    const k = Object.keys(p).find(k => c === k || c.startsWith(k + ' ') || k.startsWith(c + ' '));
+    return k ? p[k] : '';
+  }
+  function aprenderPortal(comercio, portal) {
+    const c = norm(comercio); if (!c || !portal) return;
+    const p = Object.assign({}, (E.datos.ajustes || {}).portales);
+    if (p[c] === portal) return;
+    p[c] = portal;
+    hacer({ tipo: 'ajustes', cambios: { portales: p } });
+  }
+
+  /* Pistas por tipo de comercio: dónde se pide la factura cuando no
+     hay portal impreso. Se buscan en el nombre del comercio. */
+  const PISTAS = [
+    { re: /\b(hotel|inn|hostal|posada|suites|resort|marriott|hilton|hyatt|holiday|city express|fiesta|camino real|ibis|airbnb)\b/,
+      txt: 'Hotel: pídela en recepción al hacer check-out, con estos datos. Si ya saliste, en su sitio con el número de reservación. En Airbnb, desde la reservación en la app.' },
+    { re: /\b(uber|didi|cabify|indrive|beat)\b/,
+      txt: 'Viajes por app: la factura se pide en la misma app, en su apartado de facturación, con los datos de la Ibero. Da de alta los datos una vez y pide las de cada viaje.' },
+    { re: /\b(volaris|viva|vivaaerobus|aeromexico|aerolinea|aeropuerto|ado|etn|primera plus|autobus)\b/,
+      txt: 'Vuelos y autobuses: en su sitio, sección de facturación, con la clave de reservación o el número de boleto.' },
+    { re: /\b(gas|gasolina|gasolinera|pemex|bp|shell|mobil|g500|oxxo gas)\b/,
+      txt: 'Gasolinera: el portal viene en el ticket; suelen pedir número de estación, folio y la fecha exacta. Algunas sólo dan unos días.' },
+    { re: /\b(taxi|propina|estacionamiento|parquimetro)\b/,
+      txt: 'Taxis de la calle, propinas y parquímetros casi nunca dan factura. Si no hay, márcalo como «No tiene»: se comprueba aparte.' },
+  ];
+  const pista = comercio => { const c = norm(comercio); const p = PISTAS.find(p => p.re.test(c)); return p ? p.txt : ''; };
 
   /* ── Almacén local: IndexedDB para la cola y las fotos ── */
   const idb = (() => {
@@ -245,7 +282,10 @@
     const f = t.factura || 'pendiente';
     if (f === 'sin') return { c: 'e-sin', txt: 'Sin factura' };
     if (f === 'recibida') return { c: 'e-ok', txt: 'Factura recibida' };
-    if (f === 'solicitada') return { c: 'e-pedida', txt: 'Factura pedida' };
+    if (f === 'solicitada') {
+      const n = t.solicitada_el ? -diasHasta(t.solicitada_el) : 0;
+      return n >= 2 ? { c: 'e-alerta', txt: 'Pedida hace ' + n + ' días · revisa tu correo' } : { c: 'e-pedida', txt: 'Factura pedida' };
+    }
     if (faltaDato(t)) return { c: 'e-leer', txt: t.foto ? 'Por leer' : 'Faltan datos' };
     const lim = limite(t);
     if (!lim) return { c: 'e-pedir', txt: 'Por facturar' };
@@ -291,9 +331,10 @@
     const r = ruta();
     if (!desdeSync && antesDeSalir) { const g = antesDeSalir; antesDeSalir = null; g(); }
     // Al llegar datos nuevos no se repinta un formulario mientras se escribe en él.
-    if (desdeSync && (r.vista === 'ticket' || r.vista === 'viaje')) return;
+    if (desdeSync && (r.vista === 'ticket' || r.vista === 'viaje' || r.vista === 'facturar')) return;
     if (desdeSync && document.activeElement && document.activeElement.matches('input, textarea, select')) return;
     if (r.vista === 'ticket') return vistaTicket(r.id, r.q === 'nuevo');
+    if (r.vista === 'facturar') return vistaFacturar(r.id);
     if (r.vista === 'fiscales') return vistaFiscales();
     if (r.vista === 'viajes') return vistaViajes();
     if (r.vista === 'viaje') return vistaViaje(r.id);
@@ -396,16 +437,34 @@
       franja = '<div class="franja ' + (vencidos.length ? 'peligro' : 'alerta') + '">' + I.reloj + '<div>' +
         (pronto ? '<b>' + pronto + (pronto === 1 ? ' ticket vence' : ' tickets vencen') + ' pronto.</b> El primero, el ' + fechaCorta(prox) + '. ' : '') +
         (vencidos.length ? '<b>' + vencidos.length + ' ya ' + (vencidos.length === 1 ? 'venció' : 'vencieron') + '.</b> Intenta igual: algunos comercios todavía facturan. ' : '') +
-        '</div></div>';
+        '<button class="enlace" id="b-ver-urgentes" style="padding:0;color:inherit">Ver cuáles</button></div></div>';
     }
 
-    // Lista agrupada por día
+    // Filtros: sólo aparecen los que tienen algo
+    const FILTROS = [
+      { id: 'todos', nombre: 'Todos', f: () => true },
+      { id: 'facturar', nombre: 'Por facturar', f: t => porFacturar(t) },
+      { id: 'pedidas', nombre: 'Pedidas', f: t => t.factura === 'solicitada' },
+      { id: 'leer', nombre: 'Por leer', f: t => faltaDato(t) && t.factura !== 'sin' },
+      { id: 'sin', nombre: 'Sin factura', f: t => t.factura === 'sin' },
+    ];
+    const conteos = FILTROS.map(x => ts.filter(x.f).length);
+    if (!FILTROS.some((x, i) => x.id === E.filtro && conteos[i])) E.filtro = 'todos';
+    const filtro = FILTROS.find(x => x.id === E.filtro);
+    const vis = ts.filter(filtro.f);
+    const filtros = ts.length ? '<div class="filtros" role="group" aria-label="Filtrar">' + FILTROS.map((x, i) => (i && !conteos[i]) ? '' :
+      '<button type="button" data-filtro="' + x.id + '" aria-pressed="' + (x.id === E.filtro) + '">' + x.nombre + (i ? '<b>' + conteos[i] + '</b>' : '') + '</button>').join('') + '</div>' : '';
+
     let lista = '';
     if (!ts.length) {
       lista = '<p class="vacio">Todavía no hay tickets' + (v ? ' en este viaje' : '') + '.<br>Toma la foto en cuanto pagues: es lo único que no se puede recuperar después.</p>';
+    } else if (E.filtro === 'facturar') {
+      // Por facturar: en orden de fecha límite, el que vence primero arriba
+      lista = '<h3 class="dia">El que vence primero, arriba</h3><div class="lista">' +
+        vis.slice().sort((a, b) => (limite(a) || '9').localeCompare(limite(b) || '9')).map(fila).join('') + '</div>';
     } else {
       const grupos = {};
-      ts.forEach(t => { const d = t.fecha || ''; (grupos[d] = grupos[d] || []).push(t); });
+      vis.forEach(t => { const d = t.fecha || ''; (grupos[d] = grupos[d] || []).push(t); });
       lista = Object.keys(grupos).sort().reverse().map(d =>
         '<h3 class="dia">' + (d ? fechaLarga(d) : 'Sin fecha') + '</h3><div class="lista">' +
         grupos[d].map(fila).join('') + '</div>').join('');
@@ -416,8 +475,11 @@
         : '<div class="franja info">' + I.info + '<div>Primero <a href="#viaje/nuevo">da de alta tu viaje</a>; los tickets se van juntando ahí.</div></div>') +
       '<button class="btn primario capturar" id="b-capturar">' + I.camara + 'Foto del ticket</button>' +
       '<div class="bajo-captura"><button class="enlace" id="b-galeria">Subir imagen</button><span class="tenue">·</span><button class="enlace" id="b-sinfoto">Sin foto</button></div>' +
-      franja + resumen + lista + nav('tickets');
+      franja + resumen + filtros + lista + nav('tickets');
 
+    $$('[data-filtro]').forEach(b => b.onclick = () => { E.filtro = b.dataset.filtro; vistaTickets(); });
+    const bu = $('#b-ver-urgentes');
+    if (bu) bu.onclick = () => { E.filtro = 'facturar'; vistaTickets(); const l = $('.filtros'); if (l) l.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
     const sel = $('#sel-viaje');
     if (sel) sel.onchange = () => hacer({ tipo: 'ajustes', cambios: { viajeActivo: sel.value } }).then(pintar);
     $('#b-capturar').onclick = () => tomarFoto(null, 'camara');
@@ -516,6 +578,7 @@
       (t.foto ? '<img class="foto-grande" id="foto" alt="Foto del ticket">'
         : '<div class="sin-foto"><span>Sin foto</span><div><button class="enlace" data-foto="camara">Tomar foto</button> · <button class="enlace" data-foto="galeria">Subir imagen</button></div></div>') +
       (esNuevo && faltaDato(t) ? '<div class="franja info">' + I.info + '<div><b>Listo, ya quedó guardado.</b> Si tienes prisa, déjalo así: queda «Por leer» y los datos se llenan después desde la foto.</div></div>' : '') +
+      ((t.factura || 'pendiente') === 'pendiente' ? '<a class="btn primario ancho" href="#facturar/' + esc(id) + '" style="margin-bottom:14px">' + I.fiscal + 'Pedir factura</a>' : '') +
       '<form id="f-ticket" autocomplete="off">' +
       '<p class="guardado" id="guardado"></p>' +
       '<label class="campo total"><span>Total</span><input name="total" inputmode="decimal" placeholder="0.00" value="' + (t.total != null && t.total !== '' ? esc(Number(t.total).toFixed(2)) : '') + '"></label>' +
@@ -527,7 +590,8 @@
       '<label class="campo"><span>Portal de facturación</span><input name="portal" type="url" inputmode="url" placeholder="La dirección que viene en el ticket" value="' + esc(t.portal || '') + '"></label>' +
       (t.portal ? '<a class="btn ancho" style="margin:-4px 0 14px" target="_blank" rel="noopener" href="' + esc(/^https?:/i.test(t.portal) ? t.portal : 'https://' + t.portal) + '">' + I.abrir + 'Abrir portal</a>' : '') +
       '<label class="campo"><span>Fecha límite para facturar</span><input name="limite" type="date" value="' + esc(t.limite || lim || '') + '">' +
-      '<small class="chico tenue">Casi todos dejan facturar dentro del mismo mes. Si el ticket dice otra cosa (24 o 72 horas), cámbiala.</small></label>' +
+      '<span class="rapidas"><button type="button" data-lim="0">Mismo día</button><button type="button" data-lim="1">24 h</button><button type="button" data-lim="3">72 h</button><button type="button" data-lim="mes">Fin de mes</button></span>' +
+      '<small class="chico tenue">Casi todos dejan facturar dentro del mismo mes. Si el ticket dice otra cosa, cámbiala.</small></label>' +
       '<label class="campo"><span>Viaje</span><select name="viaje">' + viajes + '</select></label>' +
       '<label class="campo"><span>Notas</span><textarea name="notas" placeholder="Ej. comida con el equipo de voleibol">' + esc(t.notas || '') + '</textarea></label>' +
       '<div class="pie-ficha">' + (t.foto ? '<button type="button" class="btn" data-foto="camara">' + I.camara + 'Otra foto</button>' : '') +
@@ -572,22 +636,35 @@
       Object.keys(ahora).forEach(k => { if ((ahora[k] || null) !== (base[k] || null)) cambios[k] = ahora[k]; });
       if (!Object.keys(cambios).length) return;
       Object.assign(base, cambios);
+      if (base.portal && base.comercio && ('portal' in cambios || 'comercio' in cambios)) aprenderPortal(base.comercio, base.portal);
       hacer({ tipo: 'ticket', id, cambios });
       const g = $('#guardado'); if (g) { g.textContent = 'Guardado'; setTimeout(() => { if (g) g.textContent = ''; }, 1500); }
     }
     f.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(guardarYa, 700); });
     f.addEventListener('change', ev => {
       if (ev.target.name === 'fecha' && !base.limite) f.limite.value = f.fecha.value ? finDeMes(f.fecha.value) : '';
+      if (ev.target.name === 'comercio' && !f.portal.value) {
+        const p = portalConocido(f.comercio.value);
+        if (p) { f.portal.value = p; avisar('Usé el portal de la vez pasada'); }
+      }
       guardarYa();
     });
     antesDeSalir = guardarYa;   // el enrutador lo llama antes de cambiar de vista
+    $$('[data-lim]', f).forEach(b => b.onclick = () => {
+      const desde = f.fecha.value || hoy();
+      f.limite.value = b.dataset.lim === 'mes' ? finDeMes(desde)
+        : new Date(aFecha(desde).getTime() + Number(b.dataset.lim) * 864e5).toISOString().slice(0, 10);
+      guardarYa();
+    });
     $$('[data-chips]', f).forEach(g => g.addEventListener('click', ev => {
       const b = ev.target.closest('button'); if (!b) return;
       const campo = g.dataset.chips;
       const val = (campo === 'categoria' && b.getAttribute('aria-pressed') === 'true') ? null : b.dataset.v;
       $$('button', g).forEach(x => x.setAttribute('aria-pressed', String(x.dataset.v === val)));
       base[campo] = val;
-      hacer({ tipo: 'ticket', id, cambios: { [campo]: val } });
+      const cambios = { [campo]: val };
+      if (campo === 'factura' && val === 'solicitada' && !base.solicitada_el) cambios.solicitada_el = base.solicitada_el = hoy();
+      hacer({ tipo: 'ticket', id, cambios });
       const gd = $('#guardado'); if (gd) { gd.textContent = 'Guardado'; setTimeout(() => { gd.textContent = ''; }, 1500); }
     }));
 
@@ -597,6 +674,78 @@
       location.hash = '#tickets';
       avisar('Ticket borrado', { texto: 'Deshacer', fn: () => hacer({ tipo: 'borrar', id, si: false, ticket: copia }).then(pintar) });
     };
+  }
+
+  /* ── Vista: pedir factura (el asistente) ─────────────── */
+  function vistaFacturar(id) {
+    const t = E.datos.tickets.find(x => x.id === id);
+    if (!t) { location.hash = '#tickets'; return; }
+    const correo = (E.datos.ajustes || {}).correo || '';
+    const portal = t.portal || portalConocido(t.comercio);
+    const p = pista(t.comercio);
+    const lim = limite(t);
+    const dato = (etq, val, extra) => val
+      ? '<button class="dato" data-copiar="' + esc(val) + '" data-que="' + esc(etq) + '"><span class="medio"><small>' + esc(etq) + '</small><b>' + esc(val) + '</b>' + (extra ? '<em>' + esc(extra) + '</em>' : '') + '</span><span class="copiar">' + I.copiar + '</span></button>'
+      : '';
+    const falta = [!t.folio && 'folio', !(t.total > 0) && 'total', !t.fecha && 'fecha'].filter(Boolean);
+
+    app.innerHTML =
+      '<div class="cabeza" style="padding-bottom:4px"><button class="volver" id="b-volver">' + I.flecha + 'Ticket</button><span id="cola"></span></div>' +
+      '<h2 class="titulo-paso">Pedir factura</h2>' +
+      '<p class="tenue" style="margin:-6px 0 14px">' + esc(t.comercio || 'Comercio sin nombre') + (t.total > 0 ? ' · ' + dinero(t.total) : '') +
+      (lim ? ' · <span class="' + (diasHasta(lim) < 0 ? 'rojo' : '') + '">' + (diasHasta(lim) < 0 ? 'venció el ' : 'antes del ') + fechaCorta(lim) + '</span>' : '') + '</p>' +
+
+      '<section class="tarjeta paso"><h3><i>1</i>Entra al portal</h3>' +
+      (portal ? '<a class="btn primario ancho" target="_blank" rel="noopener" href="' + esc(conHttp(portal)) + '">' + I.abrir + 'Abrir ' + esc(portal.replace(/^https?:\/\//i, '').replace(/\/.*$/, '')) + '</a>'
+        : '<p class="chico" style="margin:0 0 10px">Busca en el ticket una dirección que diga «facturación» o «factura electrónica». Si no la trae:</p>' +
+          (t.comercio ? '<a class="btn ancho" target="_blank" rel="noopener" href="https://www.google.com/search?q=' + encodeURIComponent('facturación ' + t.comercio) + '">' + I.abrir + 'Buscar «facturación ' + esc(t.comercio) + '»</a>' : '') +
+          '<p class="chico tenue" style="margin:10px 0 0">Cuando la encuentres, anótala en el ticket: la próxima vez de ese comercio ya sale sola.</p>') +
+      (p ? '<div class="franja info" style="margin:12px 0 0">' + I.info + '<div>' + esc(p) + '</div></div>' : '') +
+      '</section>' +
+
+      '<section class="tarjeta paso"><h3><i>2</i>Datos del ticket</h3>' +
+      (falta.length ? '<p class="chico" style="color:var(--alerta);margin:0 0 6px">Falta ' + falta.join(', ') + '. Está en la foto: <a href="#ticket/' + esc(id) + '">ver ticket</a>.</p>' : '') +
+      dato('Folio o núm. de ticket', t.folio) + dato('Total', t.total > 0 ? Number(t.total).toFixed(2) : '') +
+      dato('Fecha', dmy(t.fecha), t.fecha ? fechaLarga(t.fecha) : '') +
+      (t.foto ? '<button class="btn ancho" id="b-ver" style="margin-top:10px">' + I.imagen + 'Ver la foto del ticket</button>' : '') +
+      '</section>' +
+
+      '<section class="tarjeta paso"><h3><i>3</i>Datos de la Ibero</h3>' +
+      CONFIG.fiscales.map(d => dato(d.etiqueta, d.valor, d.detalle)).join('') +
+      (correo ? dato('Correo', correo) : '<p class="chico" style="margin:10px 0 0">Falta tu correo para recibirla: <a href="#fiscales">anótalo en Datos fiscales</a>.</p>') +
+      '</section>' +
+
+      '<section class="tarjeta paso"><h3><i>4</i>¿Ya la pediste?</h3>' +
+      '<p class="chico tenue" style="margin:0 0 10px">Te tiene que llegar al correo en PDF y XML. Si el portal te deja descargarla, bájala también.</p>' +
+      '<button class="btn primario ancho" id="b-pedida">' + I.palomita + 'Ya la pedí</button>' +
+      '<div class="dos" style="margin-top:10px"><button class="btn" id="b-recibida">Ya me llegó</button><button class="btn" id="b-sin">No dan factura</button></div>' +
+      '</section>' + nav('tickets');
+    pintarCola();
+
+    $('#b-volver').onclick = () => { location.hash = '#ticket/' + id; };
+    const bv = $('#b-ver');
+    if (bv) bv.onclick = async () => {
+      let src = await idb.foto(id).catch(() => null);
+      if (!src && token()) { try { src = await rpc('via_foto', { p_token: token(), p_id: id }); if (src) idb.ponerFoto(id, src); } catch (e) { } }
+      if (src) verFoto(src); else avisar('La foto se verá cuando haya señal');
+    };
+    $$('[data-copiar]').forEach(b => b.onclick = async () => {
+      await copiar(b.dataset.copiar);
+      b.classList.add('copiado'); b.querySelector('.copiar').innerHTML = I.palomita;
+      setTimeout(() => { b.classList.remove('copiado'); b.querySelector('.copiar').innerHTML = I.copiar; }, 1400);
+      avisar('Copiado: ' + b.dataset.que);
+    });
+    const marcar = (factura, txt) => {
+      const cambios = { factura };
+      if (factura === 'solicitada' && !t.solicitada_el) cambios.solicitada_el = hoy();
+      if (!t.portal && portal) cambios.portal = portal;
+      hacer({ tipo: 'ticket', id, cambios });
+      location.hash = '#tickets';
+      avisar(txt, { texto: 'Deshacer', fn: () => hacer({ tipo: 'ticket', id, cambios: { factura: 'pendiente' } }).then(pintar) });
+    };
+    $('#b-pedida').onclick = () => marcar('solicitada', 'Marcada como pedida');
+    $('#b-recibida').onclick = () => marcar('recibida', 'Marcada como recibida');
+    $('#b-sin').onclick = () => marcar('sin', 'Va en «sin factura»');
   }
 
   function verFoto(src) {

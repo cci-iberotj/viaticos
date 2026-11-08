@@ -37,6 +37,6 @@ Viven en `config.js` → `fiscales`.
 ## Etapas
 
 1. ✅ Captura, lista, viajes con monto asignado, datos fiscales para copiar, fecha límite por ticket.
-2. Asistente para facturar: portal del comercio con los datos listos, avisos de vencimiento.
+2. ✅ Asistente «Pedir factura» (4 pasos con todo para copiar), portales aprendidos por comercio (sin lista de fábrica: una dirección inventada es peor que ninguna), pistas por tipo de comercio, fecha límite rápida (mismo día · 24 h · 72 h · fin de mes), «Pedida hace N días», filtros de la lista.
 3. Gmail personal → Drive con Apps Script: recoger PDF + XML, validar receptor y montos, empatar con el ticket.
 4. Paquete para contadores: Excel (con sección aparte de gastos sin factura) + ZIP con archivos renombrados + enlace de Drive.
