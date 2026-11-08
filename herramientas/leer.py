@@ -54,6 +54,49 @@ def bajar(solo_pendientes):
             a.write(base64.b64decode(datos))
         d = f['d']
         print('%s  %s  %s  %s' % (ruta, d.get('fecha', ''), d.get('comercio', '') or '¿comercio?', d.get('total', '') or '¿total?'))
+        qr = leer_qr(ruta)
+        if qr:
+            print('    QR: ' + qr)
+
+
+def leer_qr(ruta):
+    """Muchos tickets traen un QR «para facturar» con el folio ya puesto
+    en la dirección. Se prueba la foto entera y a dos escalas."""
+    try:
+        import cv2
+    except ImportError:
+        return ''
+    img = cv2.imread(ruta)
+    if img is None:
+        return ''
+    det = cv2.QRCodeDetector()
+    gris = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    def probar(im):
+        for p in (im, cv2.threshold(im, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]):
+            try:
+                t, _, _ = det.detectAndDecode(p)
+            except cv2.error:
+                t = ''
+            if t:
+                return t
+        return ''
+
+    t = probar(gris)
+    if t:
+        return t
+    # En la foto de un ticket entero el QR queda chico (~100 px): se recorre
+    # la foto en ventanas que se enciman y cada una se amplía 3 veces.
+    h, w = gris.shape
+    lado = max(300, min(h, w) // 3)
+    paso = lado // 2
+    for y in range(0, max(1, h - lado + paso), paso):
+        for x in range(0, max(1, w - lado + paso), paso):
+            v = gris[y:y + lado, x:x + lado]
+            t = probar(cv2.resize(v, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC))
+            if t:
+                return t
+    return ''
 
 
 def llenar(id_, pares):

@@ -72,6 +72,8 @@
   }
   function aprenderPortal(comercio, portal) {
     const c = norm(comercio); if (!c || !portal) return;
+    // Sólo la dirección base: los QR traen el folio de ESE ticket en la dirección.
+    portal = portal.replace(/[?#].*$/, '');
     const p = Object.assign({}, (E.datos.ajustes || {}).portales);
     if (p[c] === portal) return;
     p[c] = portal;
