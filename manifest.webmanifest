@@ -1,0 +1,17 @@
+{
+  "name": "Viáticos · IBERO Tijuana",
+  "short_name": "Viáticos",
+  "description": "Tickets y facturas de tus viajes de trabajo",
+  "lang": "es-MX",
+  "start_url": "./#tickets",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F1EDE9",
+  "theme_color": "#7B1E2E",
+  "icons": [
+    { "src": "icono-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icono-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icono-512-mascara.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
