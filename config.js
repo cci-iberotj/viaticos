@@ -7,7 +7,7 @@
 
 const CONFIG = {
 
-  version: '1.5',
+  version: '1.6',
 
   nube: {
     /* La llave publicable está hecha para vivir en el navegador: lo

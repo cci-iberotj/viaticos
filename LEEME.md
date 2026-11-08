@@ -38,5 +38,9 @@ Viven en `config.js` → `fiscales`.
 
 1. ✅ Captura, lista, viajes con monto asignado, datos fiscales para copiar, fecha límite por ticket.
 2. ✅ Asistente «Pedir factura» (4 pasos con todo para copiar), portales aprendidos por comercio (sin lista de fábrica: una dirección inventada es peor que ninguna), pistas por tipo de comercio, fecha límite rápida (mismo día · 24 h · 72 h · fin de mes), «Pedida hace N días», filtros de la lista.
-3. Gmail personal → Drive con Apps Script: recoger PDF + XML, validar receptor y montos, empatar con el ticket.
+3. ✅ Buzón de Gmail (`buzon.gs`, Apps Script en la cuenta de Leo, cada 15 min): lee XML (y ZIP), consulta estatus ante el SAT,
+   `via_buzon_factura` revisa receptor/régimen/CP/uso y empata con el ticket (total ±1 peso, hasta 45 días antes, prefiere mismo RFC
+   y nombre), guarda PDF + XML en Drive `Viáticos/<viaje>` y `via_buzon_pendientes` los reacomoda si cambian de viaje.
+   El script se identifica con una LLAVE DEL BUZÓN (sólo se guarda su sha256); la app la genera al copiar el script (Viajes › Gmail).
+   La app: tarjeta «Factura» en el ticket, «Facturas sin ticket» para asignar o crear ticket. Base: `supabase/buzon.sql`.
 4. Paquete para contadores: Excel (con sección aparte de gastos sin factura) + ZIP con archivos renombrados + enlace de Drive.

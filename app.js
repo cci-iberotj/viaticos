@@ -171,7 +171,7 @@
   /* ── Estado ──────────────────────────────────────────── */
   const E = {
     sesion: ls.get(LLAVE_SESION),
-    datos: ls.get(LLAVE_DATOS) || { nombre: '', ajustes: {}, viajes: [], tickets: [] },
+    datos: Object.assign({ nombre: '', ajustes: {}, viajes: [], tickets: [], facturas: [], buzon: {} }, ls.get(LLAVE_DATOS) || {}),
     pendientes: 0,
     sinRed: false,
     sincronizando: false,
@@ -199,6 +199,20 @@
       datos.viajes = datos.viajes.filter(x => x.id !== op.id);
     } else if (op.tipo === 'ajustes') {
       datos.ajustes = Object.assign({}, datos.ajustes, op.cambios);
+    } else if (op.tipo === 'asignar') {
+      // Igual que viaticos._ligar en la base
+      datos.facturas = datos.facturas || [];
+      const f = datos.facturas.find(x => x.uuid === op.uuid); if (!f) return;
+      datos.tickets.forEach(t => { if (t.uuid === op.uuid && t.id !== op.ticket) { delete t.uuid; t.factura = 'pendiente'; } });
+      datos.facturas.forEach(x => { if (op.ticket && x.ticket === op.ticket && x.uuid !== op.uuid) x.ticket = null; });
+      f.ticket = op.ticket || null;
+      const t = op.ticket && datos.tickets.find(x => x.id === op.ticket);
+      if (t) {
+        Object.assign(t, { factura: 'recibida', uuid: op.uuid, rfc: f.emisor_rfc });
+        if (!t.comercio) t.comercio = f.emisor_nombre;
+        if (!(t.total > 0)) t.total = f.total;
+        if (!t.fecha) t.fecha = f.fecha;
+      }
     }
   }
 
@@ -220,6 +234,7 @@
       case 'viaje': return rpc('via_guardar_viaje', { p_token, p_v: op.v });
       case 'borrarViaje': return rpc('via_borrar_viaje', { p_token, p_id: op.id });
       case 'ajustes': return rpc('via_guardar_ajustes', { p_token, p_cambios: op.cambios });
+      case 'asignar': return rpc('via_asignar_factura', { p_token, p_uuid: op.uuid, p_ticket: op.ticket || null });
     }
   }
 
@@ -247,6 +262,7 @@
       E.sinRed = false;
       E.ultimaSync = new Date();
       guardarCache();
+      if (alSincronizar) alSincronizar();
       pintar(true);
     } catch (e) {
       if (e.message === 'SIN_SESION') { salir(true); return; }
@@ -285,13 +301,29 @@
 
   /* ── Reglas del ticket ───────────────────────────────── */
   const limite = t => t.limite || (t.fecha ? finDeMes(t.fecha) : null);
+  const facturaDe = t => (E.datos.facturas || []).find(f => f.ticket === t.id) || null;
+  const sinTicket = () => (E.datos.facturas || []).filter(f => !f.ticket);
+  function hace(iso) {
+    if (!iso) return '';
+    const m = Math.round((Date.now() - new Date(iso)) / 60000);
+    if (m < 2) return 'hace un momento';
+    if (m < 60) return 'hace ' + m + ' min';
+    const h = Math.round(m / 60);
+    if (h < 24) return 'hace ' + h + (h === 1 ? ' hora' : ' horas');
+    const d = Math.round(h / 24);
+    return 'hace ' + d + (d === 1 ? ' día' : ' días');
+  }
   const faltaDato = t => !(t.total > 0) || !t.comercio;
   const porFacturar = t => (t.factura || 'pendiente') === 'pendiente';
 
   function estado(t) {
     const f = t.factura || 'pendiente';
     if (f === 'sin') return { c: 'e-sin', txt: 'Sin factura' };
-    if (f === 'recibida') return { c: 'e-ok', txt: 'Factura recibida' };
+    if (f === 'recibida') {
+      const x = facturaDe(t);
+      if (x && (x.errores || []).length) return { c: 'e-vencido', txt: 'Factura con datos mal' };
+      return { c: 'e-ok', txt: x ? 'Factura recibida · PDF y XML' : 'Factura recibida' };
+    }
     if (f === 'solicitada') {
       const n = t.solicitada_el ? -diasHasta(t.solicitada_el) : 0;
       return n >= 2 ? { c: 'e-alerta', txt: 'Pedida hace ' + n + ' días · revisa tu correo' } : { c: 'e-pedida', txt: 'Factura pedida' };
@@ -334,6 +366,8 @@
     return { vista, id, q: q || '' };
   }
   let antesDeSalir = null;   // guarda lo que se estaba escribiendo en una ficha
+  let alSincronizar = null;  // una vista que se actualiza sola sin repintarse (Gmail)
+  let relojVista = null;
   window.addEventListener('hashchange', () => { pintar(); window.scrollTo(0, 0); });
 
   function pintar(desdeSync) {
@@ -341,8 +375,11 @@
     const r = ruta();
     if (!desdeSync && antesDeSalir) { const g = antesDeSalir; antesDeSalir = null; g(); }
     // Al llegar datos nuevos no se repinta un formulario mientras se escribe en él.
-    if (desdeSync && (r.vista === 'ticket' || r.vista === 'viaje' || r.vista === 'facturar')) return;
+    if (!desdeSync) { alSincronizar = null; clearInterval(relojVista); }
+    if (desdeSync && (r.vista === 'ticket' || r.vista === 'viaje' || r.vista === 'facturar' || r.vista === 'gmail')) return;
     if (desdeSync && document.activeElement && document.activeElement.matches('input, textarea, select')) return;
+    if (r.vista === 'facturas') return vistaFacturas();
+    if (r.vista === 'gmail') return vistaGmail();
     if (r.vista === 'ticket') return vistaTicket(r.id, r.q === 'nuevo');
     if (r.vista === 'facturar') return vistaFacturar(r.id);
     if (r.vista === 'fiscales') return vistaFiscales();
@@ -405,7 +442,7 @@
       E.pendientes = 0;
     }
     E.sesion = null; ls.del(LLAVE_SESION); ls.del(LLAVE_DATOS);
-    E.datos = { nombre: '', ajustes: {}, viajes: [], tickets: [] };
+    E.datos = { nombre: '', ajustes: {}, viajes: [], tickets: [], facturas: [], buzon: {} };
     if (t && !vencida) rpc('via_salir', { p_token: t }).catch(() => { });
     location.hash = '';
     vistaAcceso();
@@ -535,7 +572,10 @@
         : '<div class="franja info">' + I.info + '<div>Primero <a href="#viaje/nuevo">da de alta tu viaje</a>; los tickets se van juntando ahí.</div></div>') +
       '<button class="btn primario capturar" id="b-capturar">' + I.camara + 'Foto del ticket</button>' +
       '<div class="bajo-captura"><button class="enlace" id="b-galeria">Subir imagen</button><span class="tenue">·</span><button class="enlace" id="b-sinfoto">Sin foto</button></div>' +
-      tarjetaInstalar(false) + franja + resumen + filtros + lista + nav('tickets');
+      tarjetaInstalar(false) + franja +
+      (sinTicket().length ? '<a class="franja info" href="#facturas" style="text-decoration:none">' + I.info + '<div><b>' + sinTicket().length +
+        (sinTicket().length === 1 ? ' factura llegó' : ' facturas llegaron') + ' sin ticket.</b> <u>Asignarlas</u></div></a>' : '') +
+      resumen + filtros + lista + nav('tickets');
     activarInstalar();
 
     $$('[data-filtro]').forEach(b => b.onclick = () => { E.filtro = b.dataset.filtro; vistaTickets(); });
@@ -639,6 +679,7 @@
       (t.foto ? '<img class="foto-grande" id="foto" alt="Foto del ticket">'
         : '<div class="sin-foto"><span>Sin foto</span><div><button class="enlace" data-foto="camara">Tomar foto</button> · <button class="enlace" data-foto="galeria">Subir imagen</button></div></div>') +
       (esNuevo && faltaDato(t) ? '<div class="franja info">' + I.info + '<div><b>Listo, ya quedó guardado.</b> Si tienes prisa, déjalo así: queda «Por leer» y los datos se llenan después desde la foto.</div></div>' : '') +
+      (facturaDe(t) ? tarjetaFactura(facturaDe(t), t) : '') +
       ((t.factura || 'pendiente') === 'pendiente' ? '<a class="btn primario ancho" href="#facturar/' + esc(id) + '" style="margin-bottom:14px">' + I.fiscal + 'Pedir factura</a>' : '') +
       '<form id="f-ticket" autocomplete="off">' +
       '<p class="guardado" id="guardado"></p>' +
@@ -729,11 +770,145 @@
       const gd = $('#guardado'); if (gd) { gd.textContent = 'Guardado'; setTimeout(() => { gd.textContent = ''; }, 1500); }
     }));
 
+    const bs = $('#b-soltar');
+    if (bs) bs.onclick = () => {
+      const x = facturaDe(t);
+      hacer({ tipo: 'asignar', uuid: x.uuid, ticket: null });
+      vistaTicket(id);
+      avisar('La factura quedó sin ticket', { texto: 'Deshacer', fn: () => hacer({ tipo: 'asignar', uuid: x.uuid, ticket: id }).then(() => vistaTicket(id)) });
+    };
     $('#b-borrar').onclick = () => {
       const copia = Object.assign({}, E.datos.tickets.find(x => x.id === id));
       hacer({ tipo: 'borrar', id, si: true });
       location.hash = '#tickets';
       avisar('Ticket borrado', { texto: 'Deshacer', fn: () => hacer({ tipo: 'borrar', id, si: false, ticket: copia }).then(pintar) });
+    };
+  }
+
+  /* ── Factura (la que llegó por Gmail) ────────────────── */
+  function tarjetaFactura(f, t) {
+    const err = f.errores || [], av = f.avisos || [];
+    const fila = (k, v, mono) => v == null || v === '' ? '' : '<div><dt>' + esc(k) + '</dt><dd' + (mono ? ' class="mono"' : '') + '>' + esc(v) + '</dd></div>';
+    const sat = f.sat && f.sat.estado;
+    const difiere = t && t.total > 0 && Math.abs(t.total - f.total) > 1;
+    const enlace = (k, txt) => f.drive && f.drive[k] ? '<a class="btn" target="_blank" rel="noopener" href="' + esc(f.drive[k].url) + '">' + I.abrir + txt + '</a>' : '';
+    return '<section class="tarjeta factura"><h2>Factura</h2>' +
+      (err.length ? '<div class="franja peligro">' + I.info + '<div><b>Pide que la corrijan:</b><ul>' + err.map(e => '<li>' + esc(e) + '</li>').join('') + '</ul></div></div>' : '') +
+      (av.length ? '<div class="franja alerta">' + I.info + '<div>' + av.map(esc).join('<br>') + '</div></div>' : '') +
+      (difiere ? '<div class="franja alerta">' + I.info + '<div>El ticket dice ' + dinero(t.total) + ' y la factura ' + dinero(f.total) + '. Si fue por la propina, está bien; anota la diferencia aparte.</div></div>' : '') +
+      '<dl class="fact">' + fila('Emisor', f.emisor_nombre) + fila('RFC del emisor', f.emisor_rfc) +
+      fila('Folio fiscal (UUID)', f.uuid, true) + fila('Fecha', f.fecha ? fechaLarga(f.fecha) : '') +
+      fila('Subtotal', dinero(f.subtotal)) + fila('IVA', dinero(f.iva)) + fila('Total', dinero(f.total)) +
+      fila('Ante el SAT', sat ? sat + (f.sat.revisado ? ' · ' + hace(f.sat.revisado) : '') : 'Sin verificar') + '</dl>' +
+      (f.drive ? '<div class="dos" style="margin-top:12px">' + enlace('pdf', 'PDF') + enlace('xml', 'XML') + '</div>' : '<p class="chico tenue" style="margin:10px 0 0">Los archivos se están guardando en tu Drive.</p>') +
+      (f.drive && !f.drive.pdf ? '<p class="chico tenue" style="margin:8px 0 0">El correo no traía PDF; el XML es lo que vale.</p>' : '') +
+      (t ? '<p style="margin:10px 0 0;text-align:right"><button class="enlace chico" id="b-soltar">No es de este ticket</button></p>' : '') +
+      '</section>';
+  }
+
+  /* ── Vista: facturas que llegaron sin ticket ─────────── */
+  function vistaFacturas() {
+    const fs = sinTicket();
+    const libres = E.datos.tickets.filter(t => !t.uuid && t.factura !== 'sin');
+    app.innerHTML =
+      '<div class="cabeza" style="padding-bottom:4px"><button class="volver" id="b-volver">' + I.flecha + 'Tickets</button><span id="cola"></span></div>' +
+      '<h2 class="titulo-paso">Facturas sin ticket</h2>' +
+      (fs.length ? '<p class="tenue" style="margin:-6px 0 14px">Llegaron a tu correo pero no supe de qué ticket son (casi siempre porque el total no coincide, por la propina). Elige el ticket, o crea uno si no le tomaste foto.</p>' : '<p class="vacio">Todas las facturas tienen su ticket.</p>') +
+      fs.map(f => {
+        const opciones = libres.slice().sort((a, b) => Math.abs((a.total || 0) - f.total) - Math.abs((b.total || 0) - f.total))
+          .map(t => '<option value="' + esc(t.id) + '">' + esc((t.comercio || 'Sin leer') + ' · ' + (t.total > 0 ? dinero(t.total) : 'sin total') + (t.fecha ? ' · ' + fechaCorta(t.fecha) : '')) + '</option>').join('');
+        return '<section class="tarjeta" data-uuid="' + esc(f.uuid) + '">' +
+          '<h2 style="margin-bottom:2px">' + esc(f.emisor_nombre || f.emisor_rfc) + '</h2>' +
+          '<p class="tenue" style="margin:0 0 10px">' + (f.fecha ? fechaLarga(f.fecha) : '') + ' · <b style="color:var(--tinta)">' + dinero(f.total) + '</b> · IVA ' + dinero(f.iva) + '</p>' +
+          ((f.errores || []).length ? '<div class="franja peligro">' + I.info + '<div>' + f.errores.map(esc).join('<br>') + '</div></div>' : '') +
+          ((f.tipo || 'I') !== 'I' ? '<p class="chico" style="color:var(--alerta)">' + esc((f.avisos || [])[0] || '') + '</p>' : '') +
+          (opciones ? '<label class="campo"><span>¿De qué ticket es?</span><select class="sel-ticket">' + opciones + '</select></label>' +
+            '<button class="btn primario ancho b-asignar">Asignar a ese ticket</button>' : '') +
+          '<div class="dos" style="margin-top:10px"><button class="btn b-crear">Crear ticket</button>' +
+          (f.drive && f.drive.pdf ? '<a class="btn" target="_blank" rel="noopener" href="' + esc(f.drive.pdf.url) + '">' + I.abrir + 'Ver PDF</a>' : '<span></span>') + '</div>' +
+          '</section>';
+      }).join('') + nav('tickets');
+    pintarCola();
+    $('#b-volver').onclick = () => { location.hash = '#tickets'; };
+    $$('[data-uuid]').forEach(s => {
+      const uuid = s.dataset.uuid, f = fs.find(x => x.uuid === uuid);
+      const ba = $('.b-asignar', s);
+      if (ba) ba.onclick = () => { hacer({ tipo: 'asignar', uuid, ticket: $('.sel-ticket', s).value }).then(vistaFacturas); avisar('Factura asignada'); };
+      $('.b-crear', s).onclick = async () => {
+        const v = E.datos.viajes.find(x => x.inicio && x.fin && x.inicio <= f.fecha && f.fecha <= x.fin) || viajeActivo();
+        const id = nuevoId('tk');
+        await hacer({ tipo: 'ticket', id, cambios: { viaje: v ? v.id : null, fecha: f.fecha, comercio: f.emisor_nombre, total: f.total, rfc: f.emisor_rfc, factura: 'pendiente', creado: new Date().toISOString() } });
+        await hacer({ tipo: 'asignar', uuid, ticket: id });
+        location.hash = '#ticket/' + id;
+      };
+    });
+  }
+
+  /* ── Vista: conectar Gmail ───────────────────────────── */
+  function estadoBuzon() {
+    const b = E.datos.buzon || {};
+    if (!b.visto) return { ok: false, txt: b.conectado ? 'Esperando la primera revisión del script…' : 'Todavía no está conectado.' };
+    const horas = (Date.now() - new Date(b.visto)) / 36e5;
+    return {
+      ok: horas < 2,
+      txt: (horas < 2 ? 'Conectado' : 'Hace ' + hace(b.visto).replace('hace ', '') + ' que no revisa tu correo') +
+        (b.cuenta ? ' · ' + b.cuenta : '') + '. Última revisión ' + hace(b.visto) + '.',
+      errores: b.errores || [],
+    };
+  }
+
+  function vistaGmail() {
+    const pintaEstado = () => {
+      const e = estadoBuzon(), c = $('#estado-buzon'); if (!c) return;
+      c.className = 'franja ' + (e.ok ? 'ok' : 'info');
+      c.innerHTML = (e.ok ? I.palomita : I.info) + '<div>' + esc(e.txt) +
+        ((e.errores || []).length ? '<br><b>Problemas:</b> ' + e.errores.map(esc).join(' · ') : '') + '</div>';
+    };
+    app.innerHTML =
+      '<div class="cabeza" style="padding-bottom:4px"><button class="volver" id="b-volver">' + I.flecha + 'Viajes</button><span id="cola"></span></div>' +
+      '<h2 class="titulo-paso">Facturas desde tu Gmail</h2>' +
+      '<div id="estado-buzon"></div>' +
+      '<section class="tarjeta"><p style="margin:0 0 10px">Un script en <b>tu</b> cuenta de Google revisa tu correo cada 15 minutos. Cuando llega una factura: lee el XML, revisa que esté a nombre de la Ibero, la junta con su ticket y guarda el PDF y el XML en tu Drive, en la carpeta <b>Viáticos</b>, una por viaje.</p>' +
+      '<p class="chico tenue" style="margin:0">No borra ni mueve correos: sólo les pone la etiqueta «Viaticos-procesado».</p></section>' +
+      '<section class="tarjeta paso"><h3><i>1</i>Abre Apps Script</h3>' +
+      '<p class="chico" style="margin:0 0 10px">Mejor en la computadora. Entra con <b>el Gmail donde te llegan las facturas</b>.</p>' +
+      '<a class="btn ancho" target="_blank" rel="noopener" href="https://script.google.com/home/projects/create">' + I.abrir + 'Nuevo proyecto en script.google.com</a>' +
+      '<p class="chico tenue" style="margin:10px 0 0">Arriba a la izquierda dice «Proyecto sin título»: cámbiale el nombre a «Viáticos».</p></section>' +
+      '<section class="tarjeta paso"><h3><i>2</i>Pega el script</h3>' +
+      '<p class="chico" style="margin:0 0 10px">Borra lo que trae el editor (<i>function myFunction…</i>) y pega esto:</p>' +
+      '<button class="btn primario ancho" id="b-script">' + I.copiar + 'Copiar el script</button>' +
+      '<textarea id="txt-script" class="script" readonly hidden></textarea></section>' +
+      '<section class="tarjeta paso"><h3><i>3</i>Instálalo</h3><ol class="lista-pasos">' +
+      '<li>Guarda: el ícono del disquete, o Ctrl + S.</li>' +
+      '<li>En la barra de arriba, a la derecha de «Depurar», elige <b>instalar</b> y toca <b>▷ Ejecutar</b>.</li>' +
+      '<li>Google pide permiso: <b>Revisar permisos</b> → tu cuenta → <b>Configuración avanzada</b> → <b>Ir a Viáticos (no seguro)</b> → <b>Permitir</b>.</li></ol>' +
+      '<p class="chico tenue" style="margin:10px 0 0">Dice «no seguro» sólo porque el script es tuyo y Google no lo ha revisado. Lo que pide: leer tu correo, guardar archivos en tu Drive y conectarse a la app.</p></section>' +
+      '<section class="tarjeta paso"><h3><i>4</i>Listo</h3><p class="chico" style="margin:0">Arriba dirá «Conectado» en cuanto termine la primera revisión. Para probar, reenvíate a ese Gmail una factura vieja con su XML.</p></section>' +
+      nav('viajes');
+    pintarCola();
+    pintaEstado();
+    alSincronizar = pintaEstado;
+    relojVista = setInterval(() => { if (ruta().vista === 'gmail') { E.sincronizando || sincronizar(); } }, 10000);
+    $('#b-volver').onclick = () => { location.hash = '#viajes'; };
+    $('#b-script').onclick = async () => {
+      const b = E.datos.buzon || {};
+      if (b.conectado && !confirm('El buzón ya tiene un script. Copiarlo de nuevo crea una llave nueva: el script que ya instalaste deja de funcionar hasta que pegues éste en su lugar. ¿Seguir?')) return;
+      const bt = $('#b-script'); bt.disabled = true; bt.textContent = 'Preparando…';
+      try {
+        const [llave, codigo] = await Promise.all([
+          rpc('via_llave_buzon', { p_token: token() }),
+          fetch('buzon.gs?v=' + CONFIG.version).then(r => { if (!r.ok) throw new Error('script'); return r.text(); }),
+        ]);
+        const texto = codigo.replace('__LLAVE__', llave);
+        E.datos.buzon = Object.assign({}, E.datos.buzon, { conectado: true });
+        const ta = $('#txt-script'); ta.value = texto; ta.hidden = false;
+        const ok = await copiar(texto);
+        bt.innerHTML = I.palomita + (ok ? 'Copiado. Pégalo en el editor' : 'Selecciona el texto de abajo y cópialo');
+        if (!ok) { ta.focus(); ta.select(); }
+        pintaEstado();
+      } catch (e) {
+        bt.textContent = e.red ? 'Sin conexión. Intenta de nuevo' : 'No se pudo: ' + e.message;
+      } finally { bt.disabled = false; }
     };
   }
 
@@ -872,6 +1047,12 @@
           '<span class="chico tenue">' + (v.inicio ? fechaCorta(v.inicio) + (v.fin ? ' – ' + fechaCorta(v.fin) : '') : 'Sin fechas') + ' · ' + k.n + (k.n === 1 ? ' ticket' : ' tickets') + '</span></span>' +
           '<span class="total">' + dinero(k.gastado) + (v.asignado > 0 ? '<br><span class="chico tenue" style="font-family:var(--texto);font-weight:400">de ' + dinero(v.asignado) + '</span>' : '') + '</span></a>';
       }).join('') + '</div>' : '<p class="vacio">Todavía no hay viajes.</p>') +
+      (() => {
+        const e = estadoBuzon();
+        return '<section class="tarjeta" style="margin-top:22px"><h2>Facturas desde tu Gmail</h2>' +
+          '<p class="chico ' + (e.ok ? '' : 'tenue') + '" style="margin:0 0 12px' + (e.ok ? ';color:var(--ok)' : '') + '">' + esc(e.txt) + '</p>' +
+          '<a class="btn ancho" href="#gmail">' + (E.datos.buzon && E.datos.buzon.visto ? 'Ver la conexión' : 'Conectar mi Gmail') + '</a></section>';
+      })() +
       (yaInstalada() ? '' : '<div id="hueco-instalar" style="margin-top:22px"><button class="btn ancho" id="b-ver-instalar">' + I.mas + 'Agregar a mi pantalla de inicio</button></div>') +
       '<p style="text-align:center;margin-top:30px"><button class="enlace chico" id="b-salir">Cerrar sesión</button><br><span class="chico tenue">Versión ' + esc(CONFIG.version) + '</span></p>' +
       nav('viajes');
