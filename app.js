@@ -89,6 +89,7 @@
       },
       foto: id => tx('fotos', 'readonly', s => s.get(id)),
       ponerFoto: (id, datos) => tx('fotos', 'readwrite', s => s.put(datos, id)),
+      vaciar: () => Promise.all([tx('cola', 'readwrite', s => s.clear()), tx('fotos', 'readwrite', s => s.clear())]),
     };
   })();
 
@@ -342,6 +343,13 @@
 
   function salir(vencida) {
     const t = token();
+    // Al salir a propósito se vacía lo guardado en este aparato: si otra
+    // persona entra aquí, la cola no debe subirse a su cuenta.
+    if (!vencida) {
+      if (E.pendientes > 0 && !confirm('Hay ' + E.pendientes + ' cambios que todavía no suben. Si sales ahora, se pierden. ¿Salir de todos modos?')) return;
+      idb.vaciar().catch(() => { });
+      E.pendientes = 0;
+    }
     E.sesion = null; ls.del(LLAVE_SESION); ls.del(LLAVE_DATOS);
     E.datos = { nombre: '', ajustes: {}, viajes: [], tickets: [] };
     if (t && !vencida) rpc('via_salir', { p_token: t }).catch(() => { });
