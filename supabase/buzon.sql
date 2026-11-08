@@ -146,6 +146,16 @@ language plpgsql security definer set search_path = viaticos, public as $$
 declare u text := viaticos._buzon(p_llave); id text := upper(trim(coalesce(p_f->>'uuid', ''))); x viaticos.facturas; t text;
 begin
   if id !~ '^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$' then raise exception 'UUID_INVALIDO'; end if;
+  -- Su Gmail es personal: trae también facturas de sus compras. Sólo se
+  -- toman las que son de la Ibero, o las que caen en las fechas de un viaje
+  -- (ésas, aunque vengan a su nombre: es justo el error que hay que cachar).
+  if upper(coalesce(p_f->>'receptor_rfc', '')) <> 'PDO820623P92'
+     and not exists (select 1 from viaticos.viajes v
+                      where v.usuario = u and not v.borrado
+                        and (p_f->>'fecha')::date between coalesce((v.d->>'inicio')::date, '1900-01-01'::date) - 2
+                                                      and coalesce((v.d->>'fin')::date, (v.d->>'inicio')::date, '2999-01-01'::date) + 45) then
+    return jsonb_build_object('uuid', id, 'ignorada', true);
+  end if;
   select * into x from viaticos.facturas where uuid = id;
   if found then
     if x.usuario <> u then raise exception 'AJENO'; end if;

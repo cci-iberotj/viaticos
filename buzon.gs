@@ -17,7 +17,7 @@ const LLAVE = '__LLAVE__';
 const BASE = 'https://wrezcukptrtmnhnlxmao.supabase.co/rest/v1/rpc/';
 const PUBLICABLE = 'sb_publishable_XTkkarWw-P3Ls31g5ZDTOA_ZghkWshN';
 const ETIQUETA = 'Viaticos-procesado';
-const BUSQUEDA = '{filename:xml filename:zip} newer_than:120d -label:viaticos-procesado';
+const BUSQUEDA = '{filename:xml filename:zip} newer_than:60d -label:viaticos-procesado';
 const CARPETA_RAIZ = 'Viáticos';
 
 function instalar() {
@@ -72,6 +72,7 @@ function procesarMensaje(m) {
     f.correo = { asunto: m.getSubject(), de: m.getFrom(), fecha: m.getDate().toISOString() };
     f.sat = estadoSat(f);
     const r = rpc('via_buzon_factura', { p_llave: LLAVE, p_f: f });
+    if (r.ignorada) return;                           // personal, fuera de las fechas de un viaje
     if (!r.nuevo && r.drive) return;                  // ya estaba guardada
     const pdf = elegirPdf(pdfs, xmls, x, f.uuid);
     const drive = guardar(r.carpeta, nombreBase(f), x, pdf);
