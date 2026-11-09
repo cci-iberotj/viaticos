@@ -241,6 +241,9 @@ begin
                                            order by f.d->>'fecha' desc)
                           from viaticos.facturas f left join viaticos.tickets t on t.id = f.ticket
                           where f.usuario = u), '[]'::jsonb),
+    -- tickets cuya foto SÍ llegó: la app resube las que se quedaron en el celular
+    'con_foto', coalesce((select jsonb_agg(fo.ticket) from viaticos.fotos fo
+                          join viaticos.tickets t on t.id = fo.ticket where t.usuario = u), '[]'::jsonb),
     'ahora', now());
 end $$;
 

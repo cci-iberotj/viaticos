@@ -258,7 +258,9 @@
       const resto = await idb.cola();
       resto.forEach(({ op }) => aplicar(d, op));
       E.datos = d;
-      E.pendientes = resto.length;
+      const repuestas = await reponerFotos(d, resto);
+      E.pendientes = resto.length + repuestas;
+      if (repuestas) setTimeout(sincronizar, 0);
       E.sinRed = false;
       E.ultimaSync = new Date();
       guardarCache();
@@ -272,6 +274,25 @@
       E.sincronizando = false;
       pintarCola();
     }
+  }
+  // Si una foto se quedó sólo en el celular (la subida se perdió), la vuelve
+  // a encolar. Una vez por foto mientras la app está abierta, para no
+  // insistir en bucle si la base la rechaza.
+  const fotosRepuestas = new Set();
+  async function reponerFotos(d, resto) {
+    if (!Array.isArray(d.con_foto)) return 0;
+    const subidas = new Set(d.con_foto);
+    const enCola = new Set(resto.filter(x => x.op.tipo === 'foto').map(x => x.op.id));
+    let n = 0;
+    for (const t of d.tickets || []) {
+      if (!t.foto || subidas.has(t.id) || enCola.has(t.id) || fotosRepuestas.has(t.id)) continue;
+      const datos = await idb.foto(t.id).catch(() => null);
+      if (!datos) continue;
+      fotosRepuestas.add(t.id);
+      await idb.encolar({ tipo: 'foto', id: t.id, datos });
+      n++;
+    }
+    return n;
   }
   window.addEventListener('online', sincronizar);
   setInterval(() => { if (E.pendientes) sincronizar(); }, 30000);
