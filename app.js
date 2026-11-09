@@ -416,7 +416,8 @@
     const c = $('#cola'); if (!c) return;
     if (E.pendientes > 0) {
       c.className = 'cola';
-      c.textContent = (E.sinRed ? 'Sin señal · ' : '') + E.pendientes + (E.pendientes === 1 ? ' cambio por subir' : ' cambios por subir');
+      // En iPhone, cerrar la app corta la subida: hay que decirlo claro.
+      c.textContent = (E.sinRed ? 'Sin señal · ' : 'Subiendo · ') + E.pendientes + (E.pendientes === 1 ? ' cambio' : ' cambios') + ' · no cierres la app';
     } else if (E.ultimaSync) {
       c.className = 'cola ok'; c.textContent = 'Todo guardado';
     } else { c.className = ''; c.textContent = ''; }

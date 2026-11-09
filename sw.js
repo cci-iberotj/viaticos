@@ -3,7 +3,7 @@
    archivo propio y, si la red no responde, sirve esa. Primero la red,
    para que una versión nueva se vea en cuanto se publica. Las llamadas
    a la base (supabase.co) no pasan por aquí. */
-const VERSION = '1.9';
+const VERSION = '1.10';
 const CACHE = 'viaticos-' + VERSION;
 const BASICOS = ['./', 'index.html', 'config.js', 'app.js', 'estilos.css', 'tipografia.css', 'manifest.webmanifest', 'icono-192.png'];
 
