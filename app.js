@@ -800,7 +800,9 @@
       fila('Folio fiscal (UUID)', f.uuid, true) + fila('Fecha', f.fecha ? fechaLarga(f.fecha) : '') +
       fila('Subtotal', dinero(f.subtotal)) + fila('IVA', dinero(f.iva)) + fila('Total', dinero(f.total)) +
       fila('Ante el SAT', sat ? sat + (f.sat.revisado ? ' · ' + hace(f.sat.revisado) : '') : 'Sin verificar') + '</dl>' +
-      (f.drive ? '<div class="dos" style="margin-top:12px">' + enlace('pdf', 'PDF') + enlace('xml', 'XML') + '</div>' : '<p class="chico tenue" style="margin:10px 0 0">Los archivos se están guardando en tu Drive.</p>') +
+      (f.drive ? '<div class="dos" style="margin-top:12px">' + enlace('pdf', 'PDF') + enlace('xml', 'XML') + '</div>' : '<p class="chico tenue" style="margin:10px 0 0">' + (f.origen === 'descarga'
+          ? 'El PDF y el XML ya están a salvo (los bajaste del portal). Se suben a tu Drive en cuanto el buzón de Gmail reciba el correo de esta factura.'
+          : 'Los archivos se guardan en tu Drive en la siguiente revisión del buzón.') + '</p>') +
       (f.drive && !f.drive.pdf ? '<p class="chico tenue" style="margin:8px 0 0">El correo no traía PDF; el XML es lo que vale.</p>' : '') +
       (t ? '<p style="margin:10px 0 0;text-align:right"><button class="enlace chico" id="b-soltar">No es de este ticket</button></p>' : '') +
       '</section>';
