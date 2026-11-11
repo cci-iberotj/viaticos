@@ -7,7 +7,7 @@
 
 const CONFIG = {
 
-  version: '1.11',
+  version: '1.12',
 
   nube: {
     /* La llave publicable está hecha para vivir en el navegador: lo
@@ -50,6 +50,10 @@ const CONFIG = {
   /* Tope de comida por día que acepta Contabilidad (reglamento de
      viáticos, según la jefatura, nov-2026). Cada viaje lo puede cambiar. */
   topeAlimentos: 650,
+  /* «Si metes un día una de 1000 no pasa nada, pero no lo hagas los
+     7 días»: cuántos días pueden llegar al tope alto. */
+  topeAlto: 1000,
+  diasAltos: 1,
 
   /* Foto: lado largo máximo y calidad JPEG. 1600 px deja leer el
      folio de un ticket térmico y pesa unos 200 KB. */

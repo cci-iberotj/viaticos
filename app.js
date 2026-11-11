@@ -404,23 +404,38 @@
     }
     return lista.filter((_, i) => mejor >> i & 1);
   }
+  // «Si metes un día una de 1000 no pasa nada, pero no lo hagas los 7 días»
+  // (Sol, nov-2026): unos cuantos días pueden llegar a un tope alto.
+  const topeAltoDe = v => (v && v.tope_alto > 0) ? Number(v.tope_alto) : CONFIG.topeAlto;
+  const diasAltosDe = v => (v && v.dias_altos != null && v.dias_altos >= 0) ? Number(v.dias_altos) : CONFIG.diasAltos;
   function entrega(v) {
-    const tope = topeDe(v);
+    const tope = topeDe(v), alto = Math.max(topeAltoDe(v), tope), nAltos = diasAltosDe(v);
     const ts = ticketsDe(v.id);
     const sel = new Set(), comida = {};
     ts.filter(entregable).forEach(t => {
       if (t.categoria !== 'alimentos') { if (t.presentar !== false) sel.add(t.id); return; }
       (comida[t.fecha || ''] = comida[t.fecha || ''] || []).push(t);
     });
-    Object.values(comida).forEach(lista => {
+    const suma0 = l => l.reduce((s, t) => s + t.total, 0);
+    // Para cada día: la mejor selección con el tope normal y con el alto.
+    const planes = Object.keys(comida).map(d => {
+      const lista = comida[d];
       const fijos = lista.filter(t => t.presentar === true);
-      fijos.forEach(t => sel.add(t.id));
-      const cupo = tope - fijos.reduce((s, t) => s + t.total, 0);
-      mejorDelDia(lista.filter(t => t.presentar == null), cupo).forEach(t => sel.add(t.id));
+      const libres = lista.filter(t => t.presentar == null);
+      const normal = mejorDelDia(libres, tope - suma0(fijos));
+      const conAlto = mejorDelDia(libres, alto - suma0(fijos));
+      return { d, fijos, normal, conAlto, gana: suma0(conAlto) - suma0(normal) };
+    });
+    // Los días altos van a donde más rinden.
+    const altos = new Set(planes.filter(p => p.gana > 0.005).sort((a, b) => b.gana - a.gana).slice(0, nAltos).map(p => p.d));
+    planes.forEach(p => {
+      p.fijos.forEach(t => sel.add(t.id));
+      (altos.has(p.d) ? p.conAlto : p.normal).forEach(t => sel.add(t.id));
     });
     const suma = f => ts.filter(f).reduce((s, t) => s + (t.total > 0 ? t.total : 0), 0);
     return {
-      tope, sel, ts,
+      tope, alto, nAltos, altos, sel, ts,
+      topeDia: d => altos.has(d) ? alto : tope,
       gastado: suma(() => true),
       entregas: suma(t => sel.has(t.id)),
       comidaDe: d => ts.filter(t => t.categoria === 'alimentos' && (t.fecha || '') === d),
@@ -1157,6 +1172,9 @@
       '<label class="campo total"><span>Viáticos asignados</span><input name="asignado" inputmode="decimal" placeholder="0.00" value="' + (v.asignado > 0 ? esc(Number(v.asignado).toFixed(2)) : '') + '"></label>' +
       '<label class="campo"><span>Tope de comida por día</span><input name="tope" inputmode="decimal" placeholder="' + CONFIG.topeAlimentos + '" value="' + (v.tope_alimentos > 0 ? esc(String(v.tope_alimentos)) : '') + '">' +
       '<small class="tenue">Lo que Contabilidad acepta de alimentos al día. Vacío = ' + dinero(CONFIG.topeAlimentos) + '.</small></label>' +
+      '<div class="dos"><label class="campo"><span>Días altos</span><input name="dias_altos" inputmode="numeric" placeholder="' + CONFIG.diasAltos + '" value="' + (v.dias_altos != null ? esc(String(v.dias_altos)) : '') + '"></label>' +
+      '<label class="campo"><span>Tope del día alto</span><input name="tope_alto" inputmode="decimal" placeholder="' + CONFIG.topeAlto + '" value="' + (v.tope_alto > 0 ? esc(String(v.tope_alto)) : '') + '"></label></div>' +
+      '<p class="chico tenue" style="margin:-8px 0 14px">Cuántos días se pueden pasar del tope, y hasta cuánto. 0 días = ninguno.</p>' +
       '<button class="btn primario ancho">Guardar</button>' +
       (nuevo ? '' : '<button type="button" class="btn peligro ancho" id="b-borrar-viaje" style="margin-top:10px">Borrar viaje</button>' +
         (n ? '<p class="chico tenue" style="margin:8px 0 0;text-align:center">Tiene ' + n + (n === 1 ? ' ticket' : ' tickets') + ': para borrarlo, primero muévelos a otro viaje o bórralos.</p>' : '')) +
@@ -1165,7 +1183,8 @@
     const f = $('#f-viaje');
     f.onsubmit = async ev => {
       ev.preventDefault();
-      const datos = { id: v.id, nombre: f.nombre.value.trim(), inicio: f.inicio.value || null, fin: f.fin.value || null, asignado: numero(f.asignado.value), tope_alimentos: numero(f.tope.value) || null };
+      const datos = { id: v.id, nombre: f.nombre.value.trim(), inicio: f.inicio.value || null, fin: f.fin.value || null, asignado: numero(f.asignado.value), tope_alimentos: numero(f.tope.value) || null,
+        tope_alto: numero(f.tope_alto.value) || null, dias_altos: f.dias_altos.value.trim() === '' ? null : Math.max(0, Math.round(numero(f.dias_altos.value) || 0)) };
       await hacer({ tipo: 'viaje', v: datos });
       if (nuevo) await hacer({ tipo: 'ajustes', cambios: { viajeActivo: v.id } });
       avisar('Viaje guardado');
@@ -1209,11 +1228,12 @@
       const comida = x.comidaDe(d);
       const comidaSi = comida.filter(t => x.sel.has(t.id)).reduce((s, t) => s + t.total, 0);
       const comidaTodo = comida.reduce((s, t) => s + (t.total > 0 ? t.total : 0), 0);
-      const pct = Math.min(100, comidaSi / x.tope * 100);
-      return '<h3 class="dia">' + (d ? fechaLarga(d) : 'Sin fecha') + '</h3>' +
-        (comida.length ? '<div class="tope-dia' + (comidaSi > x.tope ? ' pasado' : '') + '"><span>Comida que entregas: <b>' + dinero(comidaSi) + '</b> de ' + dinero(x.tope) +
+      const td = x.topeDia(d);
+      const pct = Math.min(100, comidaSi / td * 100);
+      return '<h3 class="dia">' + (d ? fechaLarga(d) : 'Sin fecha') + (x.altos.has(d) ? ' <span class="dia-alto">Día alto</span>' : '') + '</h3>' +
+        (comida.length ? '<div class="tope-dia' + (comidaSi > td ? ' pasado' : '') + '"><span>Comida que entregas: <b>' + dinero(comidaSi) + '</b> de ' + dinero(td) +
           (comidaTodo > comidaSi ? ' <span class="tenue">· gastaste ' + dinero(comidaTodo) + '</span>' : '') + '</span>' +
-          '<div class="barra' + (comidaSi > x.tope ? ' pasado' : '') + '"><i style="width:' + pct.toFixed(1) + '%"></i></div></div>' : '') +
+          '<div class="barra' + (comidaSi > td ? ' pasado' : '') + '"><i style="width:' + pct.toFixed(1) + '%"></i></div></div>' : '') +
         '<div class="lista">' + dias[d].map(filaE).join('') + '</div>';
     }).join('');
 
@@ -1223,7 +1243,9 @@
       '<div class="resumen"><div><b>' + dinero(x.entregas) + '</b><span>Entregas</span></div>' +
       '<div><b>' + (devuelves != null ? dinero(Math.max(0, devuelves)) : '—') + '</b><span>Devuelves</span></div>' +
       '<div><b' + (bolsa > 0 ? ' style="color:var(--peligro)"' : '') + '>' + dinero(Math.max(0, bolsa)) + '</b><span>De tu bolsa</span></div></div>' +
-      '<p class="chico tenue" style="margin:12px 0 0">Comida: hasta <b>' + dinero(x.tope) + ' por día</b> (<a href="#viaje/' + esc(v.id) + '">cambiar</a>). ' +
+      '<p class="chico tenue" style="margin:12px 0 0">Comida: hasta <b>' + dinero(x.tope) + ' por día</b>' +
+      (x.nAltos > 0 && x.alto > x.tope ? ', y ' + (x.nAltos === 1 ? 'un día' : x.nAltos + ' días') + ' hasta <b>' + dinero(x.alto) + '</b>, el que más rinda' : '') +
+      ' (<a href="#viaje/' + esc(v.id) + '">cambiar</a>). ' +
       'Hotel, transporte y lo demás se entrega completo. Toca un ticket para ponerlo o quitarlo.</p>' +
       (asig == null ? '<p class="chico tenue" style="margin:8px 0 0">Para saber cuánto devuelves, <a href="#viaje/' + esc(v.id) + '">anota cuánto te dieron</a>.</p>' : '') +
       (manuales ? '<button class="enlace chico" id="b-automatico" style="margin-top:8px;padding:0">Volver a la selección automática</button>' : '') +
