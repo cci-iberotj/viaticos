@@ -101,7 +101,8 @@ a { color: var(--marca); }
 
 /* Resumen de dinero */
 .resumen { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; text-align: center; }
-.resumen b { display: block; font: 700 20px/1.2 var(--titular); font-variant-numeric: tabular-nums; }
+.resumen > div { min-width: 0; }
+.resumen b { display: block; font: 700 clamp(15px, 4.3vw, 20px)/1.2 var(--titular); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .resumen span { font-size: 13px; color: var(--tinta-tenue); }
 .barra { height: 8px; border-radius: 99px; background: var(--capa-0); overflow: hidden; margin: 12px 0 8px; }
 .barra i { display: block; height: 100%; background: var(--marca); border-radius: 99px; }
@@ -252,3 +253,21 @@ textarea.script { width: 100%; height: 160px; margin-top: 10px; font: 12px/1.4 u
 }
 .aviso[hidden] { display: none; }
 .aviso button { background: none; border: 0; color: #F2C7CC; font-weight: 700; padding: 4px; }
+
+/* Qué entregar */
+.comida-hoy { margin: 12px 0 0; font-size: 14.5px; color: var(--tinta-media); }
+.comida-hoy.pasado b { color: var(--peligro); }
+.fila.entrega { cursor: pointer; font: inherit; }
+.fila.entrega .marca {
+  width: 28px; height: 28px; flex: none; border-radius: 8px; border: 2px solid var(--tinta-tenue);
+  display: grid; place-items: center; color: #fff;
+}
+.fila.entrega .marca svg { width: 18px; height: 18px; }
+.fila.entrega[aria-pressed="true"] .marca { background: var(--marca); border-color: var(--marca); }
+.fila.entrega[aria-pressed="false"] .total { color: var(--tinta-tenue); text-decoration: line-through; }
+.fila.entrega[disabled] { cursor: default; opacity: .7; box-shadow: none; }
+.tope-dia { font-size: 14px; color: var(--tinta-media); margin: -2px 4px 8px; }
+.tope-dia .barra { margin: 6px 0 0; height: 6px; }
+.campo small { display: block; margin-top: 4px; font-size: 13px; }
+.dos > * { min-width: 0; }
+.campo input[type="date"] { min-width: 0; max-width: 100%; -webkit-appearance: none; appearance: none; }

@@ -379,6 +379,54 @@
     };
   }
 
+  /* ── Qué entregar a Contabilidad ─────────────────────────
+     La comida tiene tope diario. Cada día se escogen, de los tickets con
+     factura (o por pedirla), los que más se acercan al tope sin pasarse;
+     lo demás no se entrega y corre por cuenta de él. Él puede forzar
+     cualquiera a «entregar» o «no entregar» (t.presentar true/false;
+     null = automático). Lo que no es comida se entrega completo. */
+  const topeDe = v => (v && v.tope_alimentos > 0) ? Number(v.tope_alimentos) : CONFIG.topeAlimentos;
+  const entregable = t => t.factura !== 'sin' && t.total > 0;
+  function mejorDelDia(lista, cupo) {
+    if (cupo <= 0.005 || !lista.length) return [];
+    // A igual monto, gana la que ya tiene factura (una menos que pedir).
+    const peso = t => t.total + (t.factura === 'recibida' ? 0.001 : 0);
+    if (lista.length > 15) {
+      const out = []; let s = 0;
+      lista.slice().sort((a, b) => b.total - a.total).forEach(t => { if (s + t.total <= cupo + 0.005) { out.push(t); s += t.total; } });
+      return out;
+    }
+    let mejor = 0, puntos = -1;
+    for (let m = 0; m < (1 << lista.length); m++) {
+      let s = 0, p = 0;
+      for (let i = 0; i < lista.length; i++) if (m >> i & 1) { s += lista[i].total; p += peso(lista[i]); }
+      if (s <= cupo + 0.005 && p > puntos) { puntos = p; mejor = m; }
+    }
+    return lista.filter((_, i) => mejor >> i & 1);
+  }
+  function entrega(v) {
+    const tope = topeDe(v);
+    const ts = ticketsDe(v.id);
+    const sel = new Set(), comida = {};
+    ts.filter(entregable).forEach(t => {
+      if (t.categoria !== 'alimentos') { if (t.presentar !== false) sel.add(t.id); return; }
+      (comida[t.fecha || ''] = comida[t.fecha || ''] || []).push(t);
+    });
+    Object.values(comida).forEach(lista => {
+      const fijos = lista.filter(t => t.presentar === true);
+      fijos.forEach(t => sel.add(t.id));
+      const cupo = tope - fijos.reduce((s, t) => s + t.total, 0);
+      mejorDelDia(lista.filter(t => t.presentar == null), cupo).forEach(t => sel.add(t.id));
+    });
+    const suma = f => ts.filter(f).reduce((s, t) => s + (t.total > 0 ? t.total : 0), 0);
+    return {
+      tope, sel, ts,
+      gastado: suma(() => true),
+      entregas: suma(t => sel.has(t.id)),
+      comidaDe: d => ts.filter(t => t.categoria === 'alimentos' && (t.fecha || '') === d),
+    };
+  }
+
   /* ── Enrutador ───────────────────────────────────────── */
   function ruta() {
     const h = location.hash.replace(/^#/, '') || 'tickets';
@@ -406,6 +454,7 @@
     if (r.vista === 'fiscales') return vistaFiscales();
     if (r.vista === 'viajes') return vistaViajes();
     if (r.vista === 'viaje') return vistaViaje(r.id);
+    if (r.vista === 'entregar') return vistaEntregar(r.id);
     return vistaTickets();
   }
 
@@ -543,7 +592,15 @@
         '<div class="cuentas"><span>' + k.n + (k.n === 1 ? ' ticket' : ' tickets') + '</span>' +
         (k.leer ? '<span>' + k.leer + ' por leer</span>' : '') +
         (k.facturar ? '<span>' + k.facturar + ' sin factura todavía</span>' : '') +
-        (k.sin ? '<span>' + k.sin + ' sin CFDI</span>' : '') + '</div></section>';
+        (k.sin ? '<span>' + k.sin + ' sin CFDI</span>' : '') + '</div>' +
+        (() => {
+          const tope = topeDe(v);
+          const comidaHoy = ts.filter(t => t.categoria === 'alimentos' && t.fecha === hoy()).reduce((s, t) => s + (t.total > 0 ? t.total : 0), 0);
+          const enViaje = !v.inicio || !v.fin || (v.inicio <= hoy() && hoy() <= v.fin);
+          return (enViaje ? '<p class="comida-hoy' + (comidaHoy > tope ? ' pasado' : '') + '">Comida hoy: <b>' + dinero(comidaHoy) + '</b> de ' + dinero(tope) +
+            (comidaHoy > tope ? ' · te pasaste ' + dinero(comidaHoy - tope) : comidaHoy ? ' · te quedan ' + dinero(tope - comidaHoy) : '') + '</p>' : '') +
+            (ts.length ? '<a class="btn ancho" href="#entregar/' + esc(v.id) + '" style="margin-top:12px">' + I.palomita + 'Qué entregar a Contabilidad</a>' : '');
+        })() + '</section>';
     }
 
     // Franja de vencimientos (de todos los viajes: una factura vencida es dinero perdido)
@@ -1098,6 +1155,8 @@
       '<div class="dos"><label class="campo"><span>Sale</span><input name="inicio" type="date" value="' + esc(v.inicio || '') + '"></label>' +
       '<label class="campo"><span>Regresa</span><input name="fin" type="date" value="' + esc(v.fin || '') + '"></label></div>' +
       '<label class="campo total"><span>Viáticos asignados</span><input name="asignado" inputmode="decimal" placeholder="0.00" value="' + (v.asignado > 0 ? esc(Number(v.asignado).toFixed(2)) : '') + '"></label>' +
+      '<label class="campo"><span>Tope de comida por día</span><input name="tope" inputmode="decimal" placeholder="' + CONFIG.topeAlimentos + '" value="' + (v.tope_alimentos > 0 ? esc(String(v.tope_alimentos)) : '') + '">' +
+      '<small class="tenue">Lo que Contabilidad acepta de alimentos al día. Vacío = ' + dinero(CONFIG.topeAlimentos) + '.</small></label>' +
       '<button class="btn primario ancho">Guardar</button>' +
       (nuevo ? '' : '<button type="button" class="btn peligro ancho" id="b-borrar-viaje" style="margin-top:10px">Borrar viaje</button>' +
         (n ? '<p class="chico tenue" style="margin:8px 0 0;text-align:center">Tiene ' + n + (n === 1 ? ' ticket' : ' tickets') + ': para borrarlo, primero muévelos a otro viaje o bórralos.</p>' : '')) +
@@ -1106,7 +1165,7 @@
     const f = $('#f-viaje');
     f.onsubmit = async ev => {
       ev.preventDefault();
-      const datos = { id: v.id, nombre: f.nombre.value.trim(), inicio: f.inicio.value || null, fin: f.fin.value || null, asignado: numero(f.asignado.value) };
+      const datos = { id: v.id, nombre: f.nombre.value.trim(), inicio: f.inicio.value || null, fin: f.fin.value || null, asignado: numero(f.asignado.value), tope_alimentos: numero(f.tope.value) || null };
       await hacer({ tipo: 'viaje', v: datos });
       if (nuevo) await hacer({ tipo: 'ajustes', cambios: { viajeActivo: v.id } });
       avisar('Viaje guardado');
@@ -1118,6 +1177,73 @@
       hacer({ tipo: 'borrarViaje', id: v.id });
       location.hash = '#viajes';
       avisar('Viaje borrado');
+    };
+  }
+
+  /* ── Vista: qué entregar ─────────────────────────────── */
+  function vistaEntregar(id) {
+    const v = E.datos.viajes.find(x => x.id === id);
+    if (!v) { location.hash = '#tickets'; return; }
+    const x = entrega(v);
+    const asig = v.asignado > 0 ? Number(v.asignado) : null;
+    const devuelves = asig != null ? asig - x.entregas : null;
+    const bolsa = x.gastado - x.entregas;
+    const pedir = x.ts.filter(t => x.sel.has(t.id) && porFacturar(t));
+    const yaNo = x.ts.filter(t => !x.sel.has(t.id) && entregable(t) && porFacturar(t));
+    const manuales = x.ts.some(t => t.presentar === true || t.presentar === false);
+
+    const dias = {};
+    x.ts.forEach(t => { const d = t.fecha || ''; (dias[d] = dias[d] || []).push(t); });
+    const filaE = t => {
+      const si = x.sel.has(t.id), puede = entregable(t);
+      const quien = !puede ? (t.factura === 'sin' ? 'Sin factura · no se entrega' : 'Faltan datos')
+        : t.presentar === true ? 'Lo marcaste tú' : t.presentar === false ? 'Lo quitaste tú'
+        : (t.categoria === 'alimentos' ? (si ? 'Cabe en el tope' : 'No cabe en el tope') : 'Se entrega completo');
+      return '<button type="button" class="fila entrega" data-id="' + esc(t.id) + '" aria-pressed="' + si + '"' + (puede ? '' : ' disabled') + '>' +
+        '<span class="marca">' + (si ? I.palomita : '') + '</span>' +
+        '<span class="medio"><span class="comercio">' + esc(t.comercio || 'Sin comercio') + '</span>' +
+        '<span class="chico tenue">' + esc(cat(t.categoria) || 'Sin categoría') + ' · ' + esc(quien) + '</span></span>' +
+        '<span class="total">' + (t.total > 0 ? dinero(t.total) : '') + '</span></button>';
+    };
+    const lista = Object.keys(dias).sort().map(d => {
+      const comida = x.comidaDe(d);
+      const comidaSi = comida.filter(t => x.sel.has(t.id)).reduce((s, t) => s + t.total, 0);
+      const comidaTodo = comida.reduce((s, t) => s + (t.total > 0 ? t.total : 0), 0);
+      const pct = Math.min(100, comidaSi / x.tope * 100);
+      return '<h3 class="dia">' + (d ? fechaLarga(d) : 'Sin fecha') + '</h3>' +
+        (comida.length ? '<div class="tope-dia' + (comidaSi > x.tope ? ' pasado' : '') + '"><span>Comida que entregas: <b>' + dinero(comidaSi) + '</b> de ' + dinero(x.tope) +
+          (comidaTodo > comidaSi ? ' <span class="tenue">· gastaste ' + dinero(comidaTodo) + '</span>' : '') + '</span>' +
+          '<div class="barra' + (comidaSi > x.tope ? ' pasado' : '') + '"><i style="width:' + pct.toFixed(1) + '%"></i></div></div>' : '') +
+        '<div class="lista">' + dias[d].map(filaE).join('') + '</div>';
+    }).join('');
+
+    app.innerHTML =
+      '<div class="cabeza" style="padding-bottom:4px"><button class="volver" onclick="history.back()">' + I.flecha + 'Volver</button><span id="cola"></span></div>' +
+      '<section class="tarjeta"><h2>Qué entregar · ' + esc(v.nombre) + '</h2>' +
+      '<div class="resumen"><div><b>' + dinero(x.entregas) + '</b><span>Entregas</span></div>' +
+      '<div><b>' + (devuelves != null ? dinero(Math.max(0, devuelves)) : '—') + '</b><span>Devuelves</span></div>' +
+      '<div><b' + (bolsa > 0 ? ' style="color:var(--peligro)"' : '') + '>' + dinero(Math.max(0, bolsa)) + '</b><span>De tu bolsa</span></div></div>' +
+      '<p class="chico tenue" style="margin:12px 0 0">Comida: hasta <b>' + dinero(x.tope) + ' por día</b> (<a href="#viaje/' + esc(v.id) + '">cambiar</a>). ' +
+      'Hotel, transporte y lo demás se entrega completo. Toca un ticket para ponerlo o quitarlo.</p>' +
+      (asig == null ? '<p class="chico tenue" style="margin:8px 0 0">Para saber cuánto devuelves, <a href="#viaje/' + esc(v.id) + '">anota cuánto te dieron</a>.</p>' : '') +
+      (manuales ? '<button class="enlace chico" id="b-automatico" style="margin-top:8px;padding:0">Volver a la selección automática</button>' : '') +
+      '</section>' +
+      (pedir.length ? '<div class="franja alerta">' + I.info + '<div><b>' + pedir.length + (pedir.length === 1 ? ' factura por pedir' : ' facturas por pedir') + '</b> de lo que vas a entregar: ' +
+        esc(pedir.map(t => t.comercio + ' ' + dinero(t.total)).join(', ')) + '.</div></div>' : '') +
+      (yaNo.length ? '<div class="franja info">' + I.info + '<div><b>Éstas ya no hace falta pedirlas</b> (no caben en el tope): ' +
+        esc(yaNo.map(t => t.comercio + ' ' + dinero(t.total)).join(', ')) + '.</div></div>' : '') +
+      lista + nav('tickets');
+    pintarCola();
+
+    $$('.fila.entrega:not([disabled])').forEach(b => b.onclick = async () => {
+      const t = E.datos.tickets.find(z => z.id === b.dataset.id);
+      await hacer({ tipo: 'ticket', id: t.id, cambios: { presentar: !x.sel.has(t.id) } });
+      vistaEntregar(id);
+    });
+    const ba = $('#b-automatico');
+    if (ba) ba.onclick = async () => {
+      for (const t of x.ts.filter(z => z.presentar === true || z.presentar === false)) await hacer({ tipo: 'ticket', id: t.id, cambios: { presentar: null } });
+      vistaEntregar(id);
     };
   }
 

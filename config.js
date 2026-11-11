@@ -7,7 +7,7 @@
 
 const CONFIG = {
 
-  version: '1.10',
+  version: '1.11',
 
   nube: {
     /* La llave publicable está hecha para vivir en el navegador: lo
@@ -46,6 +46,10 @@ const CONFIG = {
 
   /* Días antes de la fecha límite en que el ticket se pinta de alerta */
   avisoDias: 5,
+
+  /* Tope de comida por día que acepta Contabilidad (reglamento de
+     viáticos, según la jefatura, nov-2026). Cada viaje lo puede cambiar. */
+  topeAlimentos: 650,
 
   /* Foto: lado largo máximo y calidad JPEG. 1600 px deja leer el
      folio de un ticket térmico y pesa unos 200 KB. */
